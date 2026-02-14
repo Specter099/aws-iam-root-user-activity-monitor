@@ -43,6 +43,12 @@ Spoke Accounts                           Hub Account
 ├── LICENSE                        # MIT-0 License
 ├── RootActivityMonitor.png        # Architecture diagram
 ├── iam-root-activity-monitor-source.drawio  # Draw.io diagram source
+├── cdk/                           # AWS CDK deployment (TypeScript alternative)
+│   ├── bin/app.ts                 # CDK app entry point
+│   ├── lib/root-activity-monitor-stack.ts  # Hub stack definition
+│   ├── package.json               # Node.js dependencies
+│   ├── tsconfig.json              # TypeScript configuration
+│   └── cdk.json                   # CDK app configuration
 └── root-activity-monitor-module/  # Reusable Terraform module
     ├── main.tf                    # Core infrastructure definitions
     ├── variables.tf               # Input variables
@@ -62,6 +68,7 @@ Spoke Accounts                           Hub Account
 | Category | Technology | Version/Details |
 |----------|-----------|-----------------|
 | IaC (Hub) | Terraform | ~> 5.0 AWS provider |
+| IaC (Hub alt.) | AWS CDK | v2 (TypeScript) |
 | IaC (Spokes) | CloudFormation | StackSet deployment (2010-09-09) |
 | Runtime | Python | 3.12 |
 | Cloud Platform | AWS | EventBridge, Lambda, SNS, SQS, CloudWatch, CloudTrail, IAM |
@@ -77,6 +84,13 @@ Spoke Accounts                           Hub Account
 | `root-activity-monitor-module/main.tf` | Core resources: Lambda, EventBridge, SNS, SQS DLQ, CloudWatch Alarms, IAM roles |
 | `root-activity-monitor-module/variables.tf` | Module inputs: `SNSTopicName`, `SNSSubscriptions`, `region`, `tags` |
 | `root-activity-monitor-module/outputs.tf` | Module outputs: `orgid`, `dlq_arn`, `lambda_function_arn`, `sns_topic_arn` |
+
+### CDK Infrastructure Code
+
+| File | Purpose |
+|------|---------|
+| `cdk/bin/app.ts` | CDK app entry point. Reads `notificationEmail` from context or env var |
+| `cdk/lib/root-activity-monitor-stack.ts` | Full hub stack: Lambda, EventBridge, SNS, SQS DLQ, CloudWatch Alarms |
 
 ### Lambda Function — Incident Detection Engine
 
@@ -102,7 +116,7 @@ HIGH_ACTIONS = {
 ```
 
 **Entry point**: `lambda_handler(event, context)`
-**Environment Variable**: `SNSARN` — Injected by Terraform
+**Environment Variable**: `SNSARN` — Injected by Terraform or CDK
 
 ### Reliability Infrastructure
 
@@ -117,11 +131,12 @@ HIGH_ACTIONS = {
 
 ### Prerequisites
 - AWS Organization set up
-- Terraform with AWS provider ~> 5.0
 - AWS CLI configured with appropriate credentials
 - Access to hub and spoke AWS accounts
+- **Terraform path**: Terraform with AWS provider ~> 5.0
+- **CDK path**: Node.js >= 18, npm, AWS CDK v2 (`npm install -g aws-cdk`)
 
-### Deployment Steps
+### Option A: Deploy Hub with Terraform
 
 1. **Configure Hub Account** (`hub.tf`):
    - Replace `__REPLACE_EMAIL_ADDRESS__` with notification email
@@ -134,15 +149,48 @@ HIGH_ACTIONS = {
    terraform apply
    ```
 
-3. **Deploy Spoke Accounts**:
-   - Use CloudFormation StackSets with `spoke-stackset.yaml`
-   - Provide `HubAccount` parameter (12-digit AWS account ID)
-   - Note: The template prevents deployment in the hub account itself (condition check)
+### Option B: Deploy Hub with CDK
+
+1. **Install dependencies**:
+   ```bash
+   cd cdk
+   npm install
+   ```
+
+2. **Deploy** (email is required, org ID is optional but recommended):
+   ```bash
+   npx cdk deploy \
+     -c notificationEmail=security-team@example.com \
+     -c organizationId=o-abc123def4
+   ```
+
+   Or use environment variables:
+   ```bash
+   export NOTIFICATION_EMAIL=security-team@example.com
+   export ORGANIZATION_ID=o-abc123def4
+   npx cdk deploy
+   ```
+
+3. **Other CDK commands**:
+   ```bash
+   npx cdk diff                  # Preview changes
+   npx cdk synth                 # Synthesize CloudFormation template
+   npx cdk destroy               # Tear down stack
+   ```
+
+### Deploy Spoke Accounts (required for both options)
+
+- Use CloudFormation StackSets with `spoke-stackset.yaml`
+- Provide `HubAccount` parameter (12-digit AWS account ID)
+- Note: The template prevents deployment in the hub account itself (condition check)
 
 ### Multi-Region Support
-The root `provider.tf` configures aliases for:
+
+**Terraform**: The root `provider.tf` configures aliases for:
 - `aws.euw1` → eu-west-1 (currently active in hub.tf)
 - `aws.use1` → us-east-1
+
+**CDK**: Set the region via `CDK_DEFAULT_REGION` environment variable or by modifying `env.region` in `cdk/bin/app.ts`. For multi-region, instantiate additional stacks in `app.ts` with different region values.
 
 ## Code Conventions
 
@@ -156,6 +204,14 @@ The root `provider.tf` configures aliases for:
 - **Tags**: Apply via `var.tags` map
 - **Inline policies**: Use `jsonencode()` for dynamic policies (e.g., DLQ policy)
 - **File-based policies**: Use `file()` for static JSON policies in `iam/` directory
+
+### CDK (TypeScript)
+- **Construct naming**: PascalCase matching Terraform logical names
+  - Example: `RootActivityDLQ`, `HubRootActivityEventBus`
+- **Stack props**: Use a dedicated `Props` interface extending `StackProps`
+- **Configuration**: Pass via CDK context (`-c key=value`) or environment variables
+- **Permissions**: Use CDK grant methods (`topic.grantPublish(fn)`) over raw policy statements
+- **Lambda code**: References `root-activity-monitor-module/RootActivityLambda.py` via `Code.fromAsset`
 
 ### Python (Lambda)
 - **Runtime**: Python 3.12
@@ -235,15 +291,16 @@ Edit `CRITICAL_ACTIONS` or `HIGH_ACTIONS` sets in `root-activity-monitor-module/
 
 ### Modifying the Lambda Function
 1. Edit `root-activity-monitor-module/RootActivityLambda.py`
-2. Terraform will automatically repackage via `archive_file` data source
-3. Run `terraform apply`
+2. Redeploy:
+   - **Terraform**: `terraform apply` (auto-repackages via `archive_file`)
+   - **CDK**: `cd cdk && npx cdk deploy` (auto-bundles via `Code.fromAsset`)
 
 ### Adding New Regions
 1. Add provider alias in root `provider.tf`
 2. Add new module instantiation in `hub.tf` referencing the new alias
 
 ### Changing Notification Email
-Edit `hub.tf`:
+**Terraform** — edit `hub.tf`:
 ```hcl
 module "root-activity-monitor-euw1" {
   SNSSubscriptions = "your-email@example.com"
@@ -251,10 +308,16 @@ module "root-activity-monitor-euw1" {
 }
 ```
 
+**CDK** — pass a different context value:
+```bash
+npx cdk deploy -c notificationEmail=new-email@example.com
+```
+
 ### Updating Event Patterns
-Both hub and spoke patterns must stay in sync:
-- Hub: Modify `aws_cloudwatch_event_rule` in `root-activity-monitor-module/main.tf`
-- Spoke: Modify `EventPattern` in `spoke-stackset.yaml`
+Hub and spoke patterns must stay in sync across all IaC:
+- **Terraform**: `aws_cloudwatch_event_rule` in `root-activity-monitor-module/main.tf`
+- **CDK**: `eventPattern` in `cdk/lib/root-activity-monitor-stack.ts`
+- **Spokes**: `EventPattern` in `spoke-stackset.yaml`
 
 ### Monitoring the Dead Letter Queue
 Failed Lambda invocations are sent to the SQS DLQ (`root-activity-monitor-dlq`). A CloudWatch alarm triggers SNS notification when messages appear. To inspect failed events:
@@ -270,6 +333,7 @@ aws sqs receive-message --queue-url <DLQ_URL> --max-number-of-messages 10
   ```bash
   terraform validate
   aws cloudformation validate-template --template-body file://spoke-stackset.yaml
+  cd cdk && npx cdk synth   # validates CDK stack
   ```
 - **Test Severity Classification**: Invoke Lambda with events containing different `eventName` values to verify CRITICAL/HIGH/MEDIUM routing
 
@@ -287,7 +351,8 @@ aws sqs receive-message --queue-url <DLQ_URL> --max-number-of-messages 10
 3. **Reserved Concurrency**: Lambda is set to 5 concurrent executions
 4. **Hub Account ID**: Required as CloudFormation parameter (`HubAccount`) when deploying spoke-stackset.yaml
 5. **Event Bus Name**: Must match between hub (`hub-root-activity`) and spoke configurations
-6. **Event Pattern Sync**: Hub (Terraform) and spoke (CloudFormation) event patterns must stay aligned
-7. **DLQ Monitoring**: Failed events are preserved in SQS for 14 days — advise users to check the DLQ if notifications are missing
-8. **Severity Sets**: When adding new monitored actions, update the appropriate severity set in `RootActivityLambda.py`
-9. **License**: MIT-0 (no attribution required)
+6. **Event Pattern Sync**: Hub (Terraform or CDK) and spoke (CloudFormation) event patterns must stay aligned
+7. **CDK and Terraform Parity**: The CDK stack deploys identical resources to Terraform. Changes to one should be mirrored in the other
+8. **DLQ Monitoring**: Failed events are preserved in SQS for 14 days — advise users to check the DLQ if notifications are missing
+9. **Severity Sets**: When adding new monitored actions, update the appropriate severity set in `RootActivityLambda.py`
+10. **License**: MIT-0 (no attribution required)
