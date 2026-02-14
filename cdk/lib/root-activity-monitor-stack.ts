@@ -116,12 +116,16 @@ export class RootActivityMonitorStack extends Stack {
       new events.CfnEventBusPolicy(this, 'OrgAccessPolicy', {
         eventBusName: this.eventBus.eventBusName,
         statementId: 'OrganizationAccess',
-        action: 'events:PutEvents',
-        principal: '*',
-        condition: {
-          type: 'StringEquals',
-          key: 'aws:PrincipalOrgID',
-          value: props.organizationId,
+        statement: {
+          Effect: 'Allow',
+          Principal: '*',
+          Action: 'events:PutEvents',
+          Resource: this.eventBus.eventBusArn,
+          Condition: {
+            StringEquals: {
+              'aws:PrincipalOrgID': props.organizationId,
+            },
+          },
         },
       });
     }
@@ -175,6 +179,133 @@ export class RootActivityMonitorStack extends Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
     lambdaErrorsAlarm.addAlarmAction(new cw_actions.SnsAction(this.snsTopic));
+
+    // --- CloudWatch Dashboard ---
+    const dashboard = new cloudwatch.Dashboard(this, 'RootActivityDashboard', {
+      dashboardName: 'RootActivityMonitor',
+    });
+
+    dashboard.addWidgets(
+      new cloudwatch.TextWidget({
+        markdown: '# Root Activity Monitor\nReal-time monitoring of IAM root user activity across the AWS Organization.',
+        width: 24,
+        height: 1,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Lambda Invocations (Root Events Processed)',
+        left: [this.lambdaFunction.metricInvocations({ statistic: 'Sum' })],
+        width: 8,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Lambda Errors',
+        left: [this.lambdaFunction.metricErrors({ statistic: 'Sum' })],
+        width: 8,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Lambda Duration (ms)',
+        left: [this.lambdaFunction.metricDuration()],
+        width: 8,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'DLQ Messages (Failed Events)',
+        left: [this.deadLetterQueue.metricApproximateNumberOfMessagesVisible()],
+        width: 8,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Lambda Throttles',
+        left: [this.lambdaFunction.metricThrottles({ statistic: 'Sum' })],
+        width: 8,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'SNS Notifications Sent',
+        left: [
+          this.snsTopic.metricNumberOfMessagesPublished({ statistic: 'Sum' }),
+          this.snsTopic.metricNumberOfNotificationsFailed({ statistic: 'Sum' }),
+        ],
+        width: 8,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.LogQueryWidget({
+        title: 'Recent Root Activity Events',
+        logGroupNames: [logGroup.logGroupName],
+        queryLines: [
+          'fields @timestamp, @message',
+          'filter @message like /Root activity detected/',
+          'parse @message "action=* severity=* account=* region=* source_ip=*" as action, severity, account, region, source_ip',
+          'display @timestamp, severity, action, account, region, source_ip',
+          'sort @timestamp desc',
+          'limit 20',
+        ],
+        width: 24,
+        height: 8,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.LogQueryWidget({
+        title: 'Root Activity by Severity',
+        logGroupNames: [logGroup.logGroupName],
+        queryLines: [
+          'filter @message like /Root activity detected/',
+          'parse @message "severity=*" as severity',
+          'stats count(*) as count by severity',
+          'sort count desc',
+        ],
+        view: cloudwatch.LogQueryVisualizationType.BAR,
+        width: 8,
+        height: 6,
+      }),
+      new cloudwatch.LogQueryWidget({
+        title: 'Root Activity by Account',
+        logGroupNames: [logGroup.logGroupName],
+        queryLines: [
+          'filter @message like /Root activity detected/',
+          'parse @message "account=* " as account',
+          'stats count(*) as count by account',
+          'sort count desc',
+        ],
+        view: cloudwatch.LogQueryVisualizationType.BAR,
+        width: 8,
+        height: 6,
+      }),
+      new cloudwatch.LogQueryWidget({
+        title: 'Root Activity by Action',
+        logGroupNames: [logGroup.logGroupName],
+        queryLines: [
+          'filter @message like /Root activity detected/',
+          'parse @message "action=* " as action',
+          'stats count(*) as count by action',
+          'sort count desc',
+          'limit 10',
+        ],
+        view: cloudwatch.LogQueryVisualizationType.BAR,
+        width: 8,
+        height: 6,
+      }),
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.LogQueryWidget({
+        title: 'Lambda Error Logs',
+        logGroupNames: [logGroup.logGroupName],
+        queryLines: [
+          'fields @timestamp, @message',
+          'filter @message like /ERROR|Failed/',
+          'sort @timestamp desc',
+          'limit 20',
+        ],
+        width: 24,
+        height: 6,
+      }),
+    );
 
     // --- Outputs ---
     new CfnOutput(this, 'SnsTopicArn', {
