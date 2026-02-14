@@ -30,6 +30,16 @@
             ],
             "Effect": "Allow",
             "Resource": "*"
+        },
+        {
+            "Sid": "DLQAccess",
+            "Effect": "Allow",
+            "Action": [
+                "sqs:SendMessage"
+            ],
+            "Resource": [
+                "arn:aws:sqs:*:*:root-activity-monitor-dlq"
+            ]
         }
     ]
 }
