@@ -21,8 +21,10 @@
       }
     ]
   },
-  "allowedTools": [
-    "Bash(terraform*)",
-    "Bash(tflint*)"
-  ]
+  "permissions": {
+    "allow": [
+      "Bash(terraform*)",
+      "Bash(tflint*)"
+    ]
+  }
 }
