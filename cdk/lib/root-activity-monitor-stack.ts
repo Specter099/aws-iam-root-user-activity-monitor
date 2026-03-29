@@ -106,6 +106,15 @@ export class RootActivityMonitorStack extends Stack {
       }),
     );
 
+    // Grant Lambda permission to resolve spoke account names via Organizations
+    this.lambdaFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'OrganizationsDescribeAccount',
+        actions: ['organizations:DescribeAccount'],
+        resources: ['*'],
+      }),
+    );
+
     // --- EventBridge Event Bus ---
     this.eventBus = new events.EventBus(this, 'HubRootActivityEventBus', {
       eventBusName: 'hub-root-activity',
@@ -145,7 +154,10 @@ export class RootActivityMonitorStack extends Stack {
       },
     });
 
-    rule.addTarget(new targets.LambdaFunction(this.lambdaFunction));
+    rule.addTarget(new targets.LambdaFunction(this.lambdaFunction, {
+      retryAttempts: 3,
+      maxEventAge: Duration.hours(1),
+    }));
 
     // --- CloudWatch Alarms ---
     const dlqAlarm = new cloudwatch.Alarm(this, 'DLQMessagesAlarm', {

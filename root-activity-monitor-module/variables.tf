@@ -22,3 +22,9 @@ variable "SNSSubscriptions" {
   default     = "__REPLACE_EMAIL_ADDRESS__"
 }
 
+variable "name_suffix" {
+  description = "Optional suffix appended to resource names for multi-region deployments (e.g., '-euw1')."
+  type        = string
+  default     = ""
+}
+

@@ -19,6 +19,12 @@ if (!notificationEmail) {
 const organizationId = app.node.tryGetContext('organizationId')
   || process.env.ORGANIZATION_ID;
 
+if (organizationId && !/^o-[a-z0-9]{10,32}$/.test(organizationId)) {
+  throw new Error(
+    `Invalid organizationId "${organizationId}". Must match the format o-xxxxxxxxxx (e.g., o-abc123def4).`,
+  );
+}
+
 const snsTopicName = app.node.tryGetContext('snsTopicName') || undefined;
 
 new RootActivityMonitorStack(app, 'RootActivityMonitorStack', {
