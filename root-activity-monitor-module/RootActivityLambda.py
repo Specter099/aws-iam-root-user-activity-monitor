@@ -10,6 +10,7 @@ logger.setLevel(logging.DEBUG)
 
 snsclient = boto3.client('sns')
 iamclient = boto3.client('iam')
+orgclient = boto3.client('organizations')
 snsARN = os.environ['SNSARN']
 
 # Root API actions classified by severity
@@ -50,8 +51,21 @@ def classify_severity(event_name, detail_type):
     return 'MEDIUM'
 
 
-def get_account_alias(account_id):
-    """Attempt to resolve the account alias. Falls back to account ID."""
+def get_account_name(account_id):
+    """Resolve the account name for the source account via Organizations API.
+
+    Falls back to the hub account alias, then to the raw account ID.
+    """
+    # First, try Organizations API to get the spoke account's name
+    try:
+        response = orgclient.describe_account(AccountId=account_id)
+        name = response.get('Account', {}).get('Name')
+        if name:
+            return name
+    except ClientError as e:
+        logger.debug("organizations:DescribeAccount failed for %s: %s", account_id, e)
+
+    # Fallback: hub account alias (useful when the event originates in the hub)
     try:
         response = iamclient.list_account_aliases()
         aliases = response.get('AccountAliases', [])
@@ -59,6 +73,7 @@ def get_account_alias(account_id):
             return aliases[0]
     except ClientError:
         pass
+
     return account_id
 
 
@@ -144,7 +159,7 @@ def lambda_handler(event, context):
 
     details = extract_event_details(event)
     severity = classify_severity(details['eventName'], details['detailType'])
-    account_alias = get_account_alias(details['accountId'])
+    account_alias = get_account_name(details['accountId'])
 
     logger.info(
         "Root activity detected: action=%s severity=%s account=%s region=%s source_ip=%s",

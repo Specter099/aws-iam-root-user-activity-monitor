@@ -49,6 +49,7 @@ Resources:
             - Arn
 
   EventDeliveryRole:
+    Condition: IsSpokeAccountEqualToHubAccount
     Type: 'AWS::IAM::Role'
     Properties:
       AssumeRolePolicyDocument:
@@ -76,7 +77,14 @@ Resources:
                       - Bus
                       - Name
 
+Outputs:
+  EventsRuleArn:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Description: ARN of the EventBridge rule forwarding root activity to the hub
+    Value: !GetAtt EventsRule.Arn
 
-
-
+  EventDeliveryRoleArn:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Description: ARN of the IAM role used by EventBridge to deliver events
+    Value: !GetAtt EventDeliveryRole.Arn
 
