@@ -43,11 +43,12 @@ Spoke Accounts                           Hub Account
 ├── LICENSE                        # MIT-0 License
 ├── RootActivityMonitor.png        # Architecture diagram
 ├── iam-root-activity-monitor-source.drawio  # Draw.io diagram source
-├── cdk/                           # AWS CDK deployment (TypeScript alternative)
-│   ├── bin/app.ts                 # CDK app entry point
-│   ├── lib/root-activity-monitor-stack.ts  # Hub stack definition
-│   ├── package.json               # Node.js dependencies
-│   ├── tsconfig.json              # TypeScript configuration
+├── cdk/                           # AWS CDK deployment (Python alternative)
+│   ├── app.py                     # CDK app entry point
+│   ├── root_activity_monitor/     # Stack package
+│   │   ├── __init__.py
+│   │   └── root_activity_monitor_stack.py  # Hub stack definition
+│   ├── requirements.txt           # Python dependencies
 │   └── cdk.json                   # CDK app configuration
 └── root-activity-monitor-module/  # Reusable Terraform module
     ├── main.tf                    # Core infrastructure definitions
@@ -68,7 +69,7 @@ Spoke Accounts                           Hub Account
 | Category | Technology | Version/Details |
 |----------|-----------|-----------------|
 | IaC (Hub) | Terraform | ~> 5.0 AWS provider |
-| IaC (Hub alt.) | AWS CDK | v2 (TypeScript) |
+| IaC (Hub alt.) | AWS CDK | v2 (Python) |
 | IaC (Spokes) | CloudFormation | StackSet deployment (2010-09-09) |
 | Runtime | Python | 3.12 |
 | Cloud Platform | AWS | EventBridge, Lambda, SNS, SQS, CloudWatch, CloudTrail, IAM |
@@ -89,8 +90,8 @@ Spoke Accounts                           Hub Account
 
 | File | Purpose |
 |------|---------|
-| `cdk/bin/app.ts` | CDK app entry point. Reads `notificationEmail` from context or env var |
-| `cdk/lib/root-activity-monitor-stack.ts` | Full hub stack: Lambda, EventBridge, SNS, SQS DLQ, CloudWatch Alarms |
+| `cdk/app.py` | CDK app entry point. Reads `notificationEmail` from context or env var |
+| `cdk/root_activity_monitor/root_activity_monitor_stack.py` | Full hub stack: Lambda, EventBridge, SNS, SQS DLQ, CloudWatch Alarms |
 
 ### Lambda Function — Incident Detection Engine
 
@@ -134,7 +135,7 @@ HIGH_ACTIONS = {
 - AWS CLI configured with appropriate credentials
 - Access to hub and spoke AWS accounts
 - **Terraform path**: Terraform with AWS provider ~> 5.0
-- **CDK path**: Node.js >= 18, npm, AWS CDK v2 (`npm install -g aws-cdk`)
+- **CDK path**: Python 3.12+, pip, AWS CDK v2 (`pip install aws-cdk-lib`)
 
 ### Option A: Deploy Hub with Terraform
 
@@ -154,12 +155,13 @@ HIGH_ACTIONS = {
 1. **Install dependencies**:
    ```bash
    cd cdk
-   npm install
+   python -m venv .venv && source .venv/bin/activate
+   pip install -r requirements.txt
    ```
 
 2. **Deploy** (email is required, org ID is optional but recommended):
    ```bash
-   npx cdk deploy \
+   cdk deploy \
      -c notificationEmail=security-team@example.com \
      -c organizationId=o-abc123def4
    ```
@@ -168,14 +170,14 @@ HIGH_ACTIONS = {
    ```bash
    export NOTIFICATION_EMAIL=security-team@example.com
    export ORGANIZATION_ID=o-abc123def4
-   npx cdk deploy
+   cdk deploy
    ```
 
 3. **Other CDK commands**:
    ```bash
-   npx cdk diff                  # Preview changes
-   npx cdk synth                 # Synthesize CloudFormation template
-   npx cdk destroy               # Tear down stack
+   cdk diff                  # Preview changes
+   cdk synth                 # Synthesize CloudFormation template
+   cdk destroy               # Tear down stack
    ```
 
 ### Deploy Spoke Accounts (required for both options)
@@ -190,7 +192,7 @@ HIGH_ACTIONS = {
 - `aws.euw1` → eu-west-1 (currently active in hub.tf)
 - `aws.use1` → us-east-1
 
-**CDK**: Set the region via `CDK_DEFAULT_REGION` environment variable or by modifying `env.region` in `cdk/bin/app.ts`. For multi-region, instantiate additional stacks in `app.ts` with different region values.
+**CDK**: Set the region via `CDK_DEFAULT_REGION` environment variable or by modifying `env.region` in `cdk/app.py`. For multi-region, instantiate additional stacks in `app.py` with different region values.
 
 ## Code Conventions
 
@@ -205,13 +207,13 @@ HIGH_ACTIONS = {
 - **Inline policies**: Use `jsonencode()` for dynamic policies (e.g., DLQ policy)
 - **File-based policies**: Use `file()` for static JSON policies in `iam/` directory
 
-### CDK (TypeScript)
+### CDK (Python)
 - **Construct naming**: PascalCase matching Terraform logical names
   - Example: `RootActivityDLQ`, `HubRootActivityEventBus`
-- **Stack props**: Use a dedicated `Props` interface extending `StackProps`
+- **Stack props**: Use a `dataclass` or keyword arguments extending `StackProps`
 - **Configuration**: Pass via CDK context (`-c key=value`) or environment variables
-- **Permissions**: Use CDK grant methods (`topic.grantPublish(fn)`) over raw policy statements
-- **Lambda code**: References `root-activity-monitor-module/RootActivityLambda.py` via `Code.fromAsset`
+- **Permissions**: Use CDK grant methods (`topic.grant_publish(fn)`) over raw policy statements
+- **Lambda code**: References `root-activity-monitor-module/RootActivityLambda.py` via `_lambda.Code.from_asset`
 
 ### Python (Lambda)
 - **Runtime**: Python 3.12
@@ -293,7 +295,7 @@ Edit `CRITICAL_ACTIONS` or `HIGH_ACTIONS` sets in `root-activity-monitor-module/
 1. Edit `root-activity-monitor-module/RootActivityLambda.py`
 2. Redeploy:
    - **Terraform**: `terraform apply` (auto-repackages via `archive_file`)
-   - **CDK**: `cd cdk && npx cdk deploy` (auto-bundles via `Code.fromAsset`)
+   - **CDK**: `cd cdk && source .venv/bin/activate && cdk deploy` (auto-bundles via `Code.from_asset`)
 
 ### Adding New Regions
 1. Add provider alias in root `provider.tf`
@@ -310,13 +312,13 @@ module "root-activity-monitor-euw1" {
 
 **CDK** — pass a different context value:
 ```bash
-npx cdk deploy -c notificationEmail=new-email@example.com
+cdk deploy -c notificationEmail=new-email@example.com
 ```
 
 ### Updating Event Patterns
 Hub and spoke patterns must stay in sync across all IaC:
 - **Terraform**: `aws_cloudwatch_event_rule` in `root-activity-monitor-module/main.tf`
-- **CDK**: `eventPattern` in `cdk/lib/root-activity-monitor-stack.ts`
+- **CDK**: `event_pattern` in `cdk/root_activity_monitor/root_activity_monitor_stack.py`
 - **Spokes**: `EventPattern` in `spoke-stackset.yaml`
 
 ### Monitoring the Dead Letter Queue
@@ -333,7 +335,7 @@ aws sqs receive-message --queue-url <DLQ_URL> --max-number-of-messages 10
   ```bash
   terraform validate
   aws cloudformation validate-template --template-body file://spoke-stackset.yaml
-  cd cdk && npx cdk synth   # validates CDK stack
+  cd cdk && source .venv/bin/activate && cdk synth   # validates CDK stack
   ```
 - **Test Severity Classification**: Invoke Lambda with events containing different `eventName` values to verify CRITICAL/HIGH/MEDIUM routing
 
