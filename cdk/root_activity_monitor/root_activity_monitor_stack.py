@@ -14,6 +14,43 @@ import aws_cdk.aws_sns_subscriptions as subscriptions
 import aws_cdk.aws_sqs as sqs
 from constructs import Construct
 
+# Event names forwarded by the spoke's new detection rules.
+# Used to build hub EventBridge rule patterns that mirror the spoke.
+_CONSOLE_SIGNIN_ANOMALY_NAMES = ["ConsoleLogin"]
+
+_IAM_CREDENTIAL_ABUSE_NAMES = [
+    "GetSessionToken",
+    "AssumeRole",
+    "GetFederationToken",
+    "GetCallerIdentity",
+]
+
+_PRIVILEGE_ESCALATION_NAMES = [
+    "CreateAccessKey",
+    "AttachUserPolicy",
+    "AttachRolePolicy",
+    "PutUserPolicy",
+    "PutRolePolicy",
+    "CreateLoginProfile",
+    "UpdateLoginProfile",
+    "UpdateAssumeRolePolicy",
+    "CreateRole",
+    "CreateUser",
+]
+
+_DATA_EXFILTRATION_NAMES = [
+    "CreateSnapshot",
+    "ModifySnapshotAttribute",
+    "PutBucketPolicy",
+    "PutBucketAcl",
+    "ModifyDBSnapshotAttribute",
+    "CreateDBSnapshot",
+]
+
+# EventBridge pattern fragment that excludes root principals, keeping new
+# category rules mutually exclusive with the existing root-activity rule.
+_NON_ROOT_IDENTITY = {"userIdentity": {"type": [{"anything-but": "Root"}]}}
+
 
 class RootActivityMonitorStack(cdk.Stack):
     def __init__(
@@ -136,14 +173,31 @@ class RootActivityMonitorStack(cdk.Stack):
                 ),
             )
 
-        # --- EventBridge Rule ---
-        rule = events.Rule(
-            self,
+        # Shared helper: add a rule → Lambda target on the hub event bus
+        def _add_hub_rule(construct_id, rule_name, description, event_pattern):
+            rule = events.Rule(
+                self,
+                construct_id,
+                rule_name=rule_name,
+                description=description,
+                event_bus=self.event_bus,
+                event_pattern=event_pattern,
+            )
+            rule.add_target(
+                targets.LambdaFunction(
+                    self.lambda_function,
+                    retry_attempts=3,
+                    max_event_age=cdk.Duration.hours(1),
+                )
+            )
+            return rule
+
+        # ── Existing rule: root user activity ─────────────────────────────
+        _add_hub_rule(
             "HubRootActivityRule",
-            rule_name="hub-capture-root-activity",
-            description="Capture root user AWS Console Sign In, API calls, and credential changes.",
-            event_bus=self.event_bus,
-            event_pattern=events.EventPattern(
+            "hub-capture-root-activity",
+            "Capture root user AWS Console Sign In, API calls, and credential changes.",
+            events.EventPattern(
                 detail_type=[
                     "AWS API Call via CloudTrail",
                     "AWS Console Sign In via CloudTrail",
@@ -157,12 +211,73 @@ class RootActivityMonitorStack(cdk.Stack):
             ),
         )
 
-        rule.add_target(
-            targets.LambdaFunction(
-                self.lambda_function,
-                retry_attempts=3,
-                max_event_age=cdk.Duration.hours(1),
-            )
+        # ── Category 1: Console sign-in anomalies (non-root) ──────────────
+        # Matches ConsoleLogin where MFA was not used OR the login failed.
+        # Uses EventBridge $or content-based filtering.
+        _add_hub_rule(
+            "HubConsoleSignInAnomalyRule",
+            "hub-capture-console-signin-anomalies",
+            "Detect console logins without MFA or failed login attempts (non-root).",
+            events.EventPattern(
+                detail_type=["AWS Console Sign In via CloudTrail"],
+                detail={
+                    **_NON_ROOT_IDENTITY,
+                    "$or": [
+                        {
+                            "additionalEventData": {
+                                "MFAUsed": [{"anything-but": "Yes"}],
+                            },
+                        },
+                        {
+                            "responseElements": {
+                                "ConsoleLogin": ["Failure"],
+                            },
+                        },
+                    ],
+                },
+            ),
+        )
+
+        # ── Category 2: IAM credential abuse (non-root) ───────────────────
+        _add_hub_rule(
+            "HubIAMCredentialAbuseRule",
+            "hub-capture-iam-credential-abuse",
+            "Detect credential retrieval and reconnaissance calls (non-root).",
+            events.EventPattern(
+                detail_type=["AWS API Call via CloudTrail"],
+                detail={
+                    **_NON_ROOT_IDENTITY,
+                    "eventName": _IAM_CREDENTIAL_ABUSE_NAMES,
+                },
+            ),
+        )
+
+        # ── Category 3: Privilege escalation (non-root) ───────────────────
+        _add_hub_rule(
+            "HubPrivilegeEscalationRule",
+            "hub-capture-privilege-escalation",
+            "Detect IAM policy changes and identity creation that could grant elevated access (non-root).",
+            events.EventPattern(
+                detail_type=["AWS API Call via CloudTrail"],
+                detail={
+                    **_NON_ROOT_IDENTITY,
+                    "eventName": _PRIVILEGE_ESCALATION_NAMES,
+                },
+            ),
+        )
+
+        # ── Category 4: Data exfiltration signals (non-root) ──────────────
+        _add_hub_rule(
+            "HubDataExfiltrationRule",
+            "hub-capture-data-exfiltration",
+            "Detect EBS/RDS snapshot sharing and S3 bucket exposure (non-root).",
+            events.EventPattern(
+                detail_type=["AWS API Call via CloudTrail"],
+                detail={
+                    **_NON_ROOT_IDENTITY,
+                    "eventName": _DATA_EXFILTRATION_NAMES,
+                },
+            ),
         )
 
         # --- CloudWatch Alarms ---
