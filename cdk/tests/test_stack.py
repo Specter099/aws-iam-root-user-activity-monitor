@@ -81,7 +81,7 @@ def test_log_archive_bucket_versioning_enabled(template):
     )
 
 
-def test_log_archive_bucket_lifecycle_glacier_transition(template):
+def test_log_archive_bucket_lifecycle_365_day_expiration(template):
     template.has_resource_properties(
         "AWS::S3::Bucket",
         {
@@ -92,12 +92,6 @@ def test_log_archive_bucket_lifecycle_glacier_transition(template):
                         Match.object_like(
                             {
                                 "Status": "Enabled",
-                                "Transitions": [
-                                    {
-                                        "StorageClass": "GLACIER",
-                                        "TransitionInDays": 90,
-                                    }
-                                ],
                                 "ExpirationInDays": 365,
                             }
                         )

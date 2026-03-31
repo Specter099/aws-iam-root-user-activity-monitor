@@ -294,12 +294,6 @@ class RootActivityMonitorStack(cdk.Stack):
             lifecycle_rules=[
                 s3.LifecycleRule(
                     enabled=True,
-                    transitions=[
-                        s3.Transition(
-                            storage_class=s3.StorageClass.GLACIER,
-                            transition_after=cdk.Duration.days(90),
-                        )
-                    ],
                     expiration=cdk.Duration.days(365),
                 )
             ],
