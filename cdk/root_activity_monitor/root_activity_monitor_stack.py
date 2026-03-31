@@ -16,6 +16,8 @@ import aws_cdk.aws_sns_subscriptions as subscriptions
 import aws_cdk.aws_sqs as sqs
 from constructs import Construct
 
+from root_activity_monitor.incident_response import IncidentResponseRunbooks
+
 # Event names forwarded by the spoke's new detection rules.
 # Used to build hub EventBridge rule patterns that mirror the spoke.
 _CONSOLE_SIGNIN_ANOMALY_NAMES = ["ConsoleLogin"]
@@ -280,6 +282,14 @@ class RootActivityMonitorStack(cdk.Stack):
                     "eventName": _DATA_EXFILTRATION_NAMES,
                 },
             ),
+        )
+
+        # --- Incident Response Runbooks (Step Functions) ---
+        self.runbooks = IncidentResponseRunbooks(
+            self,
+            "IncidentResponseRunbooks",
+            sns_topic=self.sns_topic,
+            event_bus=self.event_bus,
         )
 
         # --- S3 Log Archive Bucket ---
