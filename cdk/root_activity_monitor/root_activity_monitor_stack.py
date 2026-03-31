@@ -125,7 +125,7 @@ class RootActivityMonitorStack(cdk.Stack):
                 ],
             ),
             timeout=cdk.Duration.seconds(30),
-            reserved_concurrent_executions=5,
+            reserved_concurrent_executions=50,
             dead_letter_queue=self.dead_letter_queue,
             environment={
                 "SNSARN": self.sns_topic.topic_arn,
@@ -161,20 +161,22 @@ class RootActivityMonitorStack(cdk.Stack):
             event_bus_name="hub-root-activity",
         )
 
-        # Organization-scoped access to the event bus
+        # Organization-scoped access to the event bus — restricted to the
+        # EventBridge service principal used by spoke delivery roles.
         if organization_id:
-            events.CfnEventBusPolicy(
-                self,
-                "OrgAccessPolicy",
-                event_bus_name=self.event_bus.event_bus_name,
-                statement_id="OrganizationAccess",
-                action="events:PutEvents",
-                principal="*",
-                condition=events.CfnEventBusPolicy.ConditionProperty(
-                    type="StringEquals",
-                    key="aws:PrincipalOrgID",
-                    value=organization_id,
-                ),
+            self.event_bus.add_to_resource_policy(
+                iam.PolicyStatement(
+                    sid="OrganizationAccess",
+                    effect=iam.Effect.ALLOW,
+                    principals=[iam.ServicePrincipal("events.amazonaws.com")],
+                    actions=["events:PutEvents"],
+                    resources=[self.event_bus.event_bus_arn],
+                    conditions={
+                        "StringEquals": {
+                            "aws:PrincipalOrgID": organization_id,
+                        },
+                    },
+                )
             )
 
         # Shared helper: add a rule → Lambda target on the hub event bus
@@ -296,7 +298,7 @@ class RootActivityMonitorStack(cdk.Stack):
         log_archive_bucket = s3.Bucket(
             self,
             "SecurityMonitorLogsBucket",
-            bucket_name="security-monitor-logs-124307364559-us-east-1-an",
+            bucket_name=f"security-monitor-logs-{cdk.Aws.ACCOUNT_ID}-{cdk.Aws.REGION}",
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             versioned=True,
