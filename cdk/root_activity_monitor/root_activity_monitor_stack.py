@@ -358,8 +358,11 @@ class RootActivityMonitorStack(cdk.Stack):
             )
         )
 
-        # Subscription filter: export ALL Lambda log events to Firehose
-        logs.CfnSubscriptionFilter(
+        # Subscription filter: export ALL Lambda log events to Firehose.
+        # CloudWatch Logs validates the filter by doing a test PutRecord call,
+        # so the subscription filter must wait for the IAM policy to be attached
+        # to the CW Logs role before CloudFormation creates it.
+        subscription_filter = logs.CfnSubscriptionFilter(
             self,
             "LambdaLogsToFirehose",
             log_group_name=log_group.log_group_name,
@@ -367,6 +370,9 @@ class RootActivityMonitorStack(cdk.Stack):
             filter_pattern="",
             destination_arn=delivery_stream.attr_arn,
             role_arn=cw_logs_role.role_arn,
+        )
+        subscription_filter.node.add_dependency(
+            cw_logs_role.node.find_child("DefaultPolicy")
         )
 
         # --- CloudWatch Alarms ---
