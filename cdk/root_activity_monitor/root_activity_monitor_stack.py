@@ -6,9 +6,11 @@ import aws_cdk.aws_cloudwatch_actions as cw_actions
 import aws_cdk.aws_events as events
 import aws_cdk.aws_events_targets as targets
 import aws_cdk.aws_iam as iam
+import aws_cdk.aws_kinesisfirehose as firehose
 import aws_cdk.aws_kms as kms
 import aws_cdk.aws_lambda as _lambda
 import aws_cdk.aws_logs as logs
+import aws_cdk.aws_s3 as s3
 import aws_cdk.aws_sns as sns
 import aws_cdk.aws_sns_subscriptions as subscriptions
 import aws_cdk.aws_sqs as sqs
@@ -280,6 +282,91 @@ class RootActivityMonitorStack(cdk.Stack):
             ),
         )
 
+        # --- S3 Log Archive Bucket ---
+        log_archive_bucket = s3.Bucket(
+            self,
+            "SecurityMonitorLogsBucket",
+            bucket_name="security-monitor-logs-124307364559-us-east-1-an",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            versioned=True,
+            removal_policy=cdk.RemovalPolicy.RETAIN,
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    enabled=True,
+                    transitions=[
+                        s3.Transition(
+                            storage_class=s3.StorageClass.GLACIER,
+                            transition_after=cdk.Duration.days(90),
+                        )
+                    ],
+                    expiration=cdk.Duration.days(365),
+                )
+            ],
+        )
+
+        # --- Kinesis Data Firehose → S3 ---
+
+        # IAM role that Firehose assumes to write to S3
+        firehose_role = iam.Role(
+            self,
+            "FirehoseDeliveryRole",
+            assumed_by=iam.ServicePrincipal("firehose.amazonaws.com"),
+            description="Allows Kinesis Data Firehose to deliver log events to S3",
+        )
+        log_archive_bucket.grant_read_write(firehose_role)
+
+        delivery_stream = firehose.CfnDeliveryStream(
+            self,
+            "SecurityMonitorFirehose",
+            delivery_stream_name="security-monitor-logs-firehose",
+            delivery_stream_type="DirectPut",
+            extended_s3_destination_configuration=firehose.CfnDeliveryStream.ExtendedS3DestinationConfigurationProperty(
+                bucket_arn=log_archive_bucket.bucket_arn,
+                role_arn=firehose_role.role_arn,
+                prefix="logs/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/",
+                error_output_prefix="errors/!{firehose:error-output-type}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/",
+                buffering_hints=firehose.CfnDeliveryStream.BufferingHintsProperty(
+                    interval_in_seconds=300,
+                    size_in_m_bs=64,
+                ),
+                compression_format="GZIP",
+            ),
+        )
+
+        # IAM role that CloudWatch Logs assumes to put records into Firehose
+        cw_logs_role = iam.Role(
+            self,
+            "CWLogsFirehoseRole",
+            assumed_by=iam.ServicePrincipal(
+                "logs.amazonaws.com",
+                conditions={
+                    "StringLike": {
+                        "aws:SourceArn": f"arn:aws:logs:{self.region}:{self.account}:*"
+                    }
+                },
+            ),
+            description="Allows CloudWatch Logs to deliver log events to Kinesis Data Firehose",
+        )
+        cw_logs_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="PutToFirehose",
+                actions=["firehose:PutRecord", "firehose:PutRecordBatch"],
+                resources=[delivery_stream.attr_arn],
+            )
+        )
+
+        # Subscription filter: export ALL Lambda log events to Firehose
+        logs.CfnSubscriptionFilter(
+            self,
+            "LambdaLogsToFirehose",
+            log_group_name=log_group.log_group_name,
+            filter_name="all-events-to-firehose",
+            filter_pattern="",
+            destination_arn=delivery_stream.attr_arn,
+            role_arn=cw_logs_role.role_arn,
+        )
+
         # --- CloudWatch Alarms ---
         dlq_alarm = cloudwatch.Alarm(
             self,
@@ -340,4 +427,18 @@ class RootActivityMonitorStack(cdk.Stack):
             "EventBusArn",
             value=self.event_bus.event_bus_arn,
             description="Hub EventBridge event bus ARN",
+        )
+
+        cdk.CfnOutput(
+            self,
+            "LogArchiveBucketName",
+            value=log_archive_bucket.bucket_name,
+            description="S3 bucket for long-term security log archival",
+        )
+
+        cdk.CfnOutput(
+            self,
+            "FirehoseDeliveryStreamArn",
+            value=delivery_stream.attr_arn,
+            description="Kinesis Data Firehose delivery stream ARN",
         )
