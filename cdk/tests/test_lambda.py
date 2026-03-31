@@ -13,6 +13,13 @@ import sys
 import types
 import unittest
 from unittest.mock import MagicMock, patch
+from botocore.exceptions import ClientError as BotocoreClientError
+
+
+def _make_client_error(code="AccessDeniedException"):
+    return BotocoreClientError(
+        {'Error': {'Code': code, 'Message': 'mocked'}}, 'Operation'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -49,12 +56,14 @@ classify_category = lam.classify_category
 classify_severity = lam.classify_severity
 extract_event_details = lam.extract_event_details
 format_notification = lam.format_notification
+lambda_handler = lam.lambda_handler
 
 CATEGORY_ROOT = lam.CATEGORY_ROOT
 CATEGORY_CONSOLE_ANOMALY = lam.CATEGORY_CONSOLE_ANOMALY
 CATEGORY_IAM_ABUSE = lam.CATEGORY_IAM_ABUSE
 CATEGORY_PRIV_ESC = lam.CATEGORY_PRIV_ESC
 CATEGORY_DATA_EXFIL = lam.CATEGORY_DATA_EXFIL
+NOTIFY_SEVERITIES = lam.NOTIFY_SEVERITIES
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +231,7 @@ class TestClassifyCategory(unittest.TestCase):
 
 class TestClassifySeverity(unittest.TestCase):
 
-    # Root activity — existing logic preserved
+    # Root activity — all root events are CRITICAL regardless of action
     def test_root_console_sign_in_is_critical(self):
         self.assertEqual(
             classify_severity("ConsoleLogin", "AWS Console Sign In via CloudTrail", CATEGORY_ROOT),
@@ -235,36 +244,69 @@ class TestClassifySeverity(unittest.TestCase):
             "CRITICAL",
         )
 
-    def test_root_stop_logging_is_high(self):
+    def test_root_stop_logging_is_critical(self):
         self.assertEqual(
             classify_severity("StopLogging", "AWS API Call via CloudTrail", CATEGORY_ROOT),
+            "CRITICAL",
+        )
+
+    def test_root_unknown_action_is_critical(self):
+        self.assertEqual(
+            classify_severity("DescribeInstances", "AWS API Call via CloudTrail", CATEGORY_ROOT),
+            "CRITICAL",
+        )
+
+    # Console anomaly — failed login (brute-force signal) → CRITICAL; no-MFA → HIGH
+    def test_console_anomaly_failed_login_is_critical(self):
+        self.assertEqual(
+            classify_severity(
+                "ConsoleLogin", "AWS Console Sign In via CloudTrail",
+                CATEGORY_CONSOLE_ANOMALY, console_login_result="Failure",
+            ),
+            "CRITICAL",
+        )
+
+    def test_console_anomaly_no_mfa_is_high(self):
+        self.assertEqual(
+            classify_severity(
+                "ConsoleLogin", "AWS Console Sign In via CloudTrail",
+                CATEGORY_CONSOLE_ANOMALY, console_login_result="Success",
+            ),
             "HIGH",
         )
 
-    def test_root_unknown_action_is_medium(self):
+    def test_console_anomaly_unknown_result_is_high(self):
         self.assertEqual(
-            classify_severity("DescribeInstances", "AWS API Call via CloudTrail", CATEGORY_ROOT),
-            "MEDIUM",
-        )
-
-    # Console anomaly
-    def test_console_anomaly_is_high(self):
-        self.assertEqual(
-            classify_severity("ConsoleLogin", "AWS Console Sign In via CloudTrail", CATEGORY_CONSOLE_ANOMALY),
+            classify_severity(
+                "ConsoleLogin", "AWS Console Sign In via CloudTrail",
+                CATEGORY_CONSOLE_ANOMALY,
+            ),
             "HIGH",
         )
 
     # Privilege escalation
-    def test_attach_user_policy_is_critical(self):
+    def test_create_access_key_is_high(self):
         self.assertEqual(
-            classify_severity("AttachUserPolicy", "AWS API Call via CloudTrail", CATEGORY_PRIV_ESC),
-            "CRITICAL",
+            classify_severity("CreateAccessKey", "AWS API Call via CloudTrail", CATEGORY_PRIV_ESC),
+            "HIGH",
         )
 
-    def test_put_role_policy_is_critical(self):
+    def test_attach_user_policy_is_high(self):
+        self.assertEqual(
+            classify_severity("AttachUserPolicy", "AWS API Call via CloudTrail", CATEGORY_PRIV_ESC),
+            "HIGH",
+        )
+
+    def test_put_role_policy_is_high(self):
         self.assertEqual(
             classify_severity("PutRolePolicy", "AWS API Call via CloudTrail", CATEGORY_PRIV_ESC),
-            "CRITICAL",
+            "HIGH",
+        )
+
+    def test_update_assume_role_policy_is_high(self):
+        self.assertEqual(
+            classify_severity("UpdateAssumeRolePolicy", "AWS API Call via CloudTrail", CATEGORY_PRIV_ESC),
+            "HIGH",
         )
 
     def test_create_login_profile_is_high(self):
@@ -273,29 +315,41 @@ class TestClassifySeverity(unittest.TestCase):
             "HIGH",
         )
 
-    def test_create_role_is_high(self):
+    def test_create_role_is_medium(self):
         self.assertEqual(
             classify_severity("CreateRole", "AWS API Call via CloudTrail", CATEGORY_PRIV_ESC),
-            "HIGH",
-        )
-
-    # IAM credential abuse
-    def test_get_caller_identity_is_medium(self):
-        self.assertEqual(
-            classify_severity("GetCallerIdentity", "AWS API Call via CloudTrail", CATEGORY_IAM_ABUSE),
             "MEDIUM",
         )
 
-    def test_assume_role_is_high(self):
+    def test_create_user_is_medium(self):
         self.assertEqual(
-            classify_severity("AssumeRole", "AWS API Call via CloudTrail", CATEGORY_IAM_ABUSE),
-            "HIGH",
+            classify_severity("CreateUser", "AWS API Call via CloudTrail", CATEGORY_PRIV_ESC),
+            "MEDIUM",
         )
 
-    def test_get_session_token_is_high(self):
+    # IAM credential abuse
+    def test_get_caller_identity_is_low(self):
+        self.assertEqual(
+            classify_severity("GetCallerIdentity", "AWS API Call via CloudTrail", CATEGORY_IAM_ABUSE),
+            "LOW",
+        )
+
+    def test_assume_role_is_medium(self):
+        self.assertEqual(
+            classify_severity("AssumeRole", "AWS API Call via CloudTrail", CATEGORY_IAM_ABUSE),
+            "MEDIUM",
+        )
+
+    def test_get_session_token_is_medium(self):
         self.assertEqual(
             classify_severity("GetSessionToken", "AWS API Call via CloudTrail", CATEGORY_IAM_ABUSE),
-            "HIGH",
+            "MEDIUM",
+        )
+
+    def test_get_federation_token_is_medium(self):
+        self.assertEqual(
+            classify_severity("GetFederationToken", "AWS API Call via CloudTrail", CATEGORY_IAM_ABUSE),
+            "MEDIUM",
         )
 
     # Data exfiltration
@@ -311,16 +365,28 @@ class TestClassifySeverity(unittest.TestCase):
             "CRITICAL",
         )
 
-    def test_put_bucket_policy_is_high(self):
+    def test_put_bucket_policy_is_critical(self):
         self.assertEqual(
             classify_severity("PutBucketPolicy", "AWS API Call via CloudTrail", CATEGORY_DATA_EXFIL),
-            "HIGH",
+            "CRITICAL",
         )
 
-    def test_create_snapshot_is_high(self):
+    def test_put_bucket_acl_is_critical(self):
+        self.assertEqual(
+            classify_severity("PutBucketAcl", "AWS API Call via CloudTrail", CATEGORY_DATA_EXFIL),
+            "CRITICAL",
+        )
+
+    def test_create_snapshot_is_medium(self):
         self.assertEqual(
             classify_severity("CreateSnapshot", "AWS API Call via CloudTrail", CATEGORY_DATA_EXFIL),
-            "HIGH",
+            "MEDIUM",
+        )
+
+    def test_create_db_snapshot_is_medium(self):
+        self.assertEqual(
+            classify_severity("CreateDBSnapshot", "AWS API Call via CloudTrail", CATEGORY_DATA_EXFIL),
+            "MEDIUM",
         )
 
 
@@ -416,6 +482,90 @@ class TestFormatNotification(unittest.TestCase):
         details = self._details(user_type="Root", category=CATEGORY_ROOT)
         msg = format_notification(details, "CRITICAL", CATEGORY_ROOT, "my-account")
         self.assertNotIn("Principal ARN", msg)
+
+
+# ---------------------------------------------------------------------------
+# Severity-based SNS filtering (lambda_handler)
+# ---------------------------------------------------------------------------
+
+class TestSeverityBasedFiltering(unittest.TestCase):
+    """Verify that only HIGH/CRITICAL events publish to SNS."""
+
+    def _run_handler(self, event):
+        """Invoke lambda_handler with SNS and AWS clients patched out."""
+        mock_sns = MagicMock()
+        mock_sns.publish.return_value = {'MessageId': 'test-msg-id'}
+        mock_iam = MagicMock()
+        mock_iam.list_account_aliases.return_value = {'AccountAliases': ['test-account']}
+        mock_org = MagicMock()
+        mock_org.describe_account.side_effect = _make_client_error()
+
+        with patch.object(lam, 'snsclient', mock_sns), \
+             patch.object(lam, 'iamclient', mock_iam), \
+             patch.object(lam, 'orgclient', mock_org):
+            lambda_handler(event, {})
+
+        return mock_sns
+
+    def test_critical_root_event_publishes_sns(self):
+        event = _make_cloudtrail_event(event_name="CreateAccessKey", user_type="Root")
+        mock_sns = self._run_handler(event)
+        mock_sns.publish.assert_called_once()
+
+    def test_critical_data_exfil_publishes_sns(self):
+        event = _make_cloudtrail_event(event_name="PutBucketPolicy", user_type="IAMUser")
+        mock_sns = self._run_handler(event)
+        mock_sns.publish.assert_called_once()
+
+    def test_high_priv_esc_publishes_sns(self):
+        event = _make_cloudtrail_event(event_name="AttachUserPolicy", user_type="IAMUser")
+        mock_sns = self._run_handler(event)
+        mock_sns.publish.assert_called_once()
+
+    def test_medium_assume_role_suppresses_sns(self):
+        event = _make_cloudtrail_event(event_name="AssumeRole", user_type="IAMUser")
+        mock_sns = self._run_handler(event)
+        mock_sns.publish.assert_not_called()
+
+    def test_medium_create_role_suppresses_sns(self):
+        event = _make_cloudtrail_event(event_name="CreateRole", user_type="IAMUser")
+        mock_sns = self._run_handler(event)
+        mock_sns.publish.assert_not_called()
+
+    def test_medium_create_snapshot_suppresses_sns(self):
+        event = _make_cloudtrail_event(event_name="CreateSnapshot", user_type="IAMUser")
+        mock_sns = self._run_handler(event)
+        mock_sns.publish.assert_not_called()
+
+    def test_low_get_caller_identity_suppresses_sns(self):
+        event = _make_cloudtrail_event(event_name="GetCallerIdentity", user_type="IAMUser")
+        mock_sns = self._run_handler(event)
+        mock_sns.publish.assert_not_called()
+
+    def test_suppression_log_message_contains_severity_and_event(self):
+        event = _make_cloudtrail_event(event_name="AssumeRole", user_type="IAMUser")
+        mock_sns = MagicMock()
+        mock_iam = MagicMock()
+        mock_iam.list_account_aliases.return_value = {'AccountAliases': ['my-account']}
+        mock_org = MagicMock()
+        mock_org.describe_account.side_effect = _make_client_error()
+
+        with patch.object(lam, 'snsclient', mock_sns), \
+             patch.object(lam, 'iamclient', mock_iam), \
+             patch.object(lam, 'orgclient', mock_org), \
+             self.assertLogs(lam.logger, level='INFO') as log_ctx:
+            lambda_handler(event, {})
+
+        suppression_lines = [l for l in log_ctx.output if 'Suppressed' in l]
+        self.assertTrue(suppression_lines, "Expected a suppression log line")
+        self.assertIn('MEDIUM', suppression_lines[0])
+        self.assertIn('AssumeRole', suppression_lines[0])
+
+    def test_notify_severities_constant(self):
+        self.assertIn('HIGH', NOTIFY_SEVERITIES)
+        self.assertIn('CRITICAL', NOTIFY_SEVERITIES)
+        self.assertNotIn('MEDIUM', NOTIFY_SEVERITIES)
+        self.assertNotIn('LOW', NOTIFY_SEVERITIES)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,11 @@ iamclient = boto3.client('iam')
 orgclient = boto3.client('organizations')
 snsARN = os.environ['SNSARN']
 
+# ── Severity-based notification gate ──────────────────────────────────────
+# Only HIGH and CRITICAL events trigger SNS email notifications.
+# MEDIUM and LOW events are still logged to CloudWatch for audit/forensic use.
+NOTIFY_SEVERITIES = {'HIGH', 'CRITICAL'}
+
 # ── Detection categories ───────────────────────────────────────────────────
 CATEGORY_ROOT = 'ROOT_ACTIVITY'
 CATEGORY_CONSOLE_ANOMALY = 'CONSOLE_SIGNIN_ANOMALY'
@@ -114,44 +119,57 @@ def classify_category(event_name, user_type, mfa_used, console_login_result):
     return CATEGORY_ROOT
 
 
-def classify_severity(event_name, detail_type, category):
+def classify_severity(event_name, detail_type, category, console_login_result='Unknown'):
     """Classify the severity of an event given its category.
 
-    ROOT_ACTIVITY uses the existing CRITICAL_ACTIONS / HIGH_ACTIONS sets.
-    New categories use per-category severity rules.
+    Severity levels (highest to lowest): CRITICAL, HIGH, MEDIUM, LOW.
+    Only HIGH and CRITICAL events trigger SNS email notifications.
     """
     if category == CATEGORY_ROOT:
-        if 'Console Sign In' in detail_type:
-            return 'CRITICAL'
-        if event_name in CRITICAL_ACTIONS:
-            return 'CRITICAL'
-        if event_name in HIGH_ACTIONS:
-            return 'HIGH'
-        return 'MEDIUM'
+        # All root user activity is critical — root should never be used for
+        # routine operations.
+        return 'CRITICAL'
 
     if category == CATEGORY_CONSOLE_ANOMALY:
+        # Failed logins are a brute-force signal → CRITICAL.
+        # No-MFA logins are a control gap but not an active attack → HIGH.
+        if console_login_result == 'Failure':
+            return 'CRITICAL'
         return 'HIGH'
 
     if category == CATEGORY_PRIV_ESC:
-        # Policy attachment and role/user creation carry higher risk
+        # Direct access-key creation and policy manipulation → HIGH.
         if event_name in {
+            'CreateAccessKey',
             'AttachUserPolicy', 'AttachRolePolicy',
             'PutUserPolicy', 'PutRolePolicy',
-            'UpdateAssumeRolePolicy', 'CreateAccessKey',
+            'CreateLoginProfile', 'UpdateLoginProfile',
+            'UpdateAssumeRolePolicy',
         }:
-            return 'CRITICAL'
-        return 'HIGH'
-
-    if category == CATEGORY_IAM_ABUSE:
-        # Reconnaissance calls are lower severity than active abuse
-        if event_name in {'GetCallerIdentity', 'GetFederationToken'}:
+            return 'HIGH'
+        # Role/user creation is notable but lower-risk without policy changes.
+        if event_name in {'CreateRole', 'CreateUser'}:
             return 'MEDIUM'
         return 'HIGH'
 
+    if category == CATEGORY_IAM_ABUSE:
+        # Reconnaissance only → LOW; temporary credential calls → MEDIUM.
+        if event_name == 'GetCallerIdentity':
+            return 'LOW'
+        if event_name in {'AssumeRole', 'GetSessionToken', 'GetFederationToken'}:
+            return 'MEDIUM'
+        return 'MEDIUM'
+
     if category == CATEGORY_DATA_EXFIL:
-        # Modifying snapshot attributes (sharing externally) is most critical
-        if event_name in {'ModifySnapshotAttribute', 'ModifyDBSnapshotAttribute'}:
+        # External sharing of snapshots or bucket exposure → CRITICAL.
+        if event_name in {
+            'ModifySnapshotAttribute', 'ModifyDBSnapshotAttribute',
+            'PutBucketPolicy', 'PutBucketAcl',
+        }:
             return 'CRITICAL'
+        # Snapshot creation is a precursor — worth logging but not emailing.
+        if event_name in {'CreateSnapshot', 'CreateDBSnapshot'}:
+            return 'MEDIUM'
         return 'HIGH'
 
     return 'MEDIUM'
@@ -314,7 +332,10 @@ def lambda_handler(event, context):
         details['mfaUsed'],
         details['consoleLoginResult'],
     )
-    severity = classify_severity(details['eventName'], details['detailType'], category)
+    severity = classify_severity(
+        details['eventName'], details['detailType'], category,
+        details['consoleLoginResult'],
+    )
     account_alias = get_account_name(details['accountId'])
 
     category_label = CATEGORY_LABELS.get(category, category)
@@ -323,6 +344,13 @@ def lambda_handler(event, context):
         details['eventName'], category, severity, details['accountId'],
         details['awsRegion'], details['sourceIPAddress'],
     )
+
+    if severity not in NOTIFY_SEVERITIES:
+        logger.info(
+            "Suppressed email notification for %s severity event: %s in %s",
+            severity, details['eventName'], account_alias,
+        )
+        return
 
     subject = "[{0}] [{1}] {2} in {3}".format(
         severity, category_label, details['eventName'], account_alias
