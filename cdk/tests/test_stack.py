@@ -81,6 +81,16 @@ def test_log_archive_bucket_versioning_enabled(template):
     )
 
 
+def test_log_archive_bucket_account_regional_namespace(template):
+    template.has_resource_properties(
+        "AWS::S3::Bucket",
+        {
+            "BucketName": BUCKET_NAME,
+            "BucketNamespace": "account-regional",
+        },
+    )
+
+
 def test_log_archive_bucket_lifecycle_365_day_expiration(template):
     template.has_resource_properties(
         "AWS::S3::Bucket",

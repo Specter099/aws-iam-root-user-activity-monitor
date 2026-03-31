@@ -16,6 +16,8 @@ import aws_cdk.aws_sns_subscriptions as subscriptions
 import aws_cdk.aws_sqs as sqs
 from constructs import Construct
 
+from root_activity_monitor.incident_response import IncidentResponseRunbooks
+
 # Event names forwarded by the spoke's new detection rules.
 # Used to build hub EventBridge rule patterns that mirror the spoke.
 _CONSOLE_SIGNIN_ANOMALY_NAMES = ["ConsoleLogin"]
@@ -284,6 +286,14 @@ class RootActivityMonitorStack(cdk.Stack):
             ),
         )
 
+        # --- Incident Response Runbooks (Step Functions) ---
+        self.runbooks = IncidentResponseRunbooks(
+            self,
+            "IncidentResponseRunbooks",
+            sns_topic=self.sns_topic,
+            event_bus=self.event_bus,
+        )
+
         # --- S3 Log Archive Bucket ---
         log_archive_bucket = s3.Bucket(
             self,
@@ -300,6 +310,14 @@ class RootActivityMonitorStack(cdk.Stack):
                 )
             ],
         )
+
+        # Enable account-regional namespace (AWS March 2026 feature).
+        # The L2 Bucket construct does not expose bucket_namespace, so we set it
+        # via the underlying L1 CfnBucket. This causes CloudFormation to include
+        # the x-amz-bucket-namespace: account-regional header on bucket creation,
+        # scoping the name to this account+region.
+        cfn_bucket = log_archive_bucket.node.default_child
+        cfn_bucket.bucket_namespace = "account-regional"
 
         # --- Kinesis Data Firehose → S3 ---
 
@@ -352,8 +370,11 @@ class RootActivityMonitorStack(cdk.Stack):
             )
         )
 
-        # Subscription filter: export ALL Lambda log events to Firehose
-        logs.CfnSubscriptionFilter(
+        # Subscription filter: export ALL Lambda log events to Firehose.
+        # CloudWatch Logs validates the filter by doing a test PutRecord call,
+        # so the subscription filter must wait for the IAM policy to be attached
+        # to the CW Logs role before CloudFormation creates it.
+        subscription_filter = logs.CfnSubscriptionFilter(
             self,
             "LambdaLogsToFirehose",
             log_group_name=log_group.log_group_name,
@@ -361,6 +382,9 @@ class RootActivityMonitorStack(cdk.Stack):
             filter_pattern="",
             destination_arn=delivery_stream.attr_arn,
             role_arn=cw_logs_role.role_arn,
+        )
+        subscription_filter.node.add_dependency(
+            cw_logs_role.node.find_child("DefaultPolicy")
         )
 
         # --- CloudWatch Alarms ---
