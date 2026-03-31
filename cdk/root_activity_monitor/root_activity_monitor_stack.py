@@ -299,6 +299,14 @@ class RootActivityMonitorStack(cdk.Stack):
             ],
         )
 
+        # Enable account-regional namespace (AWS March 2026 feature).
+        # The L2 Bucket construct does not expose bucket_namespace, so we set it
+        # via the underlying L1 CfnBucket. This causes CloudFormation to include
+        # the x-amz-bucket-namespace: account-regional header on bucket creation,
+        # scoping the name to this account+region.
+        cfn_bucket = log_archive_bucket.node.default_child
+        cfn_bucket.bucket_namespace = "account-regional"
+
         # --- Kinesis Data Firehose → S3 ---
 
         # IAM role that Firehose assumes to write to S3
