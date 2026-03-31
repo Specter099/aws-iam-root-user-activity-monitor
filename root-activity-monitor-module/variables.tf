@@ -28,3 +28,20 @@ variable "name_suffix" {
   default     = ""
 }
 
+variable "log_archive_bucket_name" {
+  description = "S3 bucket name for long-term security log archival. Defaults to security-monitor-logs-{account_id}-{region}."
+  type        = string
+  default     = ""
+}
+
+variable "enable_log_archive" {
+  description = "Enable S3 log archive bucket and Firehose pipeline for Lambda log export."
+  type        = bool
+  default     = true
+}
+
+variable "enable_incident_response" {
+  description = "Enable incident response runbooks (Step Functions, DynamoDB, runbook Lambdas)."
+  type        = bool
+  default     = true
+}

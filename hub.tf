@@ -16,4 +16,9 @@ module "root-activity-monitor-euw1" {
     Terraform   = "true"
     Environment = "dev"
   }
+
+  // CDK-parity features (enabled by default).
+  // Set to false to deploy without log archival or incident response.
+  // enable_log_archive       = true
+  // enable_incident_response = true
 }
