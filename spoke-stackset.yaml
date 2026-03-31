@@ -18,7 +18,7 @@ Conditions:
   # Adding an EventBus as a target within an account is not allowed.
   IsSpokeAccountEqualToHubAccount: !Not [ !Equals [ !Ref HubAccount , !Ref "AWS::AccountId" ] ]
 Resources:
-  
+
   EventsRule:
     Condition: IsSpokeAccountEqualToHubAccount  # Adding a custom EventBus as a target within an account is not allowed.
     Type: 'AWS::Events::Rule'
@@ -48,6 +48,154 @@ Resources:
             - EventDeliveryRole
             - Arn
 
+  # ── Category 1: Console sign-in anomalies ──────────────────────────────────
+  # Detects non-root console logins where MFA was not used or the login failed.
+  # Root console logins are handled by EventsRule above.
+  ConsoleSignInAnomalyRule:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Detect console logins without MFA or failed login attempts (non-root users)
+      EventPattern:
+        detail-type:
+          - AWS Console Sign In via CloudTrail
+        detail:
+          userIdentity:
+            type:
+              - anything-but: Root
+          $or:
+            - additionalEventData:
+                MFAUsed:
+                  - anything-but: "Yes"
+            - responseElements:
+                ConsoleLogin:
+                  - Failure
+      Name: ConsoleSignInAnomalyRule
+      State: ENABLED
+      Targets:
+        - Arn: !Sub
+            - >-
+              arn:aws:events:${AWS::Region}:${HubAccount}:event-bus/${EventBusName}
+            - EventBusName: !FindInMap
+                - EventBridge
+                - Bus
+                - Name
+          Id: ConsoleSignInAnomalyEvent
+          RoleArn: !GetAtt
+            - EventDeliveryRole
+            - Arn
+
+  # ── Category 2: IAM credential abuse ──────────────────────────────────────
+  # Detects credential retrieval and federation calls from non-root principals.
+  # CreateAccessKey is excluded here; it is covered by PrivilegeEscalationRule.
+  IAMCredentialAbuseRule:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Detect IAM credential abuse - session tokens, role assumption, federation, and recon (non-root users)
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          userIdentity:
+            type:
+              - anything-but: Root
+          eventName:
+            - GetSessionToken
+            - AssumeRole
+            - GetFederationToken
+            - GetCallerIdentity
+      Name: IAMCredentialAbuseRule
+      State: ENABLED
+      Targets:
+        - Arn: !Sub
+            - >-
+              arn:aws:events:${AWS::Region}:${HubAccount}:event-bus/${EventBusName}
+            - EventBusName: !FindInMap
+                - EventBridge
+                - Bus
+                - Name
+          Id: IAMCredentialAbuseEvent
+          RoleArn: !GetAtt
+            - EventDeliveryRole
+            - Arn
+
+  # ── Category 3: Privilege escalation ──────────────────────────────────────
+  # Detects IAM changes that could grant elevated access from non-root principals.
+  PrivilegeEscalationRule:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Detect privilege escalation - IAM policy changes, credential creation, and role/user creation (non-root users)
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          userIdentity:
+            type:
+              - anything-but: Root
+          eventName:
+            - CreateAccessKey
+            - AttachUserPolicy
+            - AttachRolePolicy
+            - PutUserPolicy
+            - PutRolePolicy
+            - CreateLoginProfile
+            - UpdateLoginProfile
+            - UpdateAssumeRolePolicy
+            - CreateRole
+            - CreateUser
+      Name: PrivilegeEscalationRule
+      State: ENABLED
+      Targets:
+        - Arn: !Sub
+            - >-
+              arn:aws:events:${AWS::Region}:${HubAccount}:event-bus/${EventBusName}
+            - EventBusName: !FindInMap
+                - EventBridge
+                - Bus
+                - Name
+          Id: PrivilegeEscalationEvent
+          RoleArn: !GetAtt
+            - EventDeliveryRole
+            - Arn
+
+  # ── Category 4: Data exfiltration signals ─────────────────────────────────
+  # Detects storage sharing / exposure actions from non-root principals.
+  DataExfiltrationRule:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Detect data exfiltration signals - EBS/RDS snapshot sharing and S3 bucket exposure (non-root users)
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          userIdentity:
+            type:
+              - anything-but: Root
+          eventName:
+            - CreateSnapshot
+            - ModifySnapshotAttribute
+            - PutBucketPolicy
+            - PutBucketAcl
+            - ModifyDBSnapshotAttribute
+            - CreateDBSnapshot
+      Name: DataExfiltrationRule
+      State: ENABLED
+      Targets:
+        - Arn: !Sub
+            - >-
+              arn:aws:events:${AWS::Region}:${HubAccount}:event-bus/${EventBusName}
+            - EventBusName: !FindInMap
+                - EventBridge
+                - Bus
+                - Name
+          Id: DataExfiltrationEvent
+          RoleArn: !GetAtt
+            - EventDeliveryRole
+            - Arn
+
   EventDeliveryRole:
     Condition: IsSpokeAccountEqualToHubAccount
     Type: 'AWS::IAM::Role'
@@ -60,7 +208,7 @@ Resources:
               Service: events.amazonaws.com
             Action:
               - 'sts:AssumeRole'
-      Path: /      
+      Path: /
       Policies:
         - PolicyName: EventBusDeliveryRolePolicy
           PolicyDocument:
@@ -88,3 +236,22 @@ Outputs:
     Description: ARN of the IAM role used by EventBridge to deliver events
     Value: !GetAtt EventDeliveryRole.Arn
 
+  ConsoleSignInAnomalyRuleArn:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Description: ARN of the EventBridge rule forwarding console sign-in anomalies to the hub
+    Value: !GetAtt ConsoleSignInAnomalyRule.Arn
+
+  IAMCredentialAbuseRuleArn:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Description: ARN of the EventBridge rule forwarding IAM credential abuse events to the hub
+    Value: !GetAtt IAMCredentialAbuseRule.Arn
+
+  PrivilegeEscalationRuleArn:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Description: ARN of the EventBridge rule forwarding privilege escalation events to the hub
+    Value: !GetAtt PrivilegeEscalationRule.Arn
+
+  DataExfiltrationRuleArn:
+    Condition: IsSpokeAccountEqualToHubAccount
+    Description: ARN of the EventBridge rule forwarding data exfiltration signals to the hub
+    Value: !GetAtt DataExfiltrationRule.Arn
