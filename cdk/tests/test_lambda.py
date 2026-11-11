@@ -7,10 +7,8 @@ patched out before import so the tests can run without AWS credentials.
 """
 
 import importlib
-import json
 import os
 import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 from botocore.exceptions import ClientError as BotocoreClientError

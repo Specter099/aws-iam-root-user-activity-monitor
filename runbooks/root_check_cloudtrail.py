@@ -5,7 +5,6 @@ Query CloudTrail for all root user actions in the last 24 hours.
 Input:  full state (EventBridge event + $.log_result)
 Output: {root_actions: [...], action_count: N}  → stored at $.cloudtrail_result
 """
-import os
 from datetime import datetime, timedelta, timezone
 
 import boto3

@@ -11,7 +11,6 @@ Output: {role_name, external_accounts_found, external_account_ids,
 import json
 import re
 
-import boto3
 
 
 _ACCOUNT_PRINCIPAL_RE = re.compile(r'"arn:aws:iam::(\d{12}):')

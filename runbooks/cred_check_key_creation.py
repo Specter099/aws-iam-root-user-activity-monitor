@@ -7,7 +7,6 @@ Input:  full state (EventBridge event + $.log_result)
 Output: {key_id, key_owner, created_by, is_suspicious}
         → stored at $.key_creation_result
 """
-import boto3
 
 
 def lambda_handler(event, context):
