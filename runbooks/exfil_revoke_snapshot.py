@@ -50,7 +50,6 @@ def lambda_handler(event, context):
     errors = []
     for account in external_accounts:
         try:
-            remove_item = {"UserId": account} if account.isdigit() else {"Group": account}
             ec2.modify_snapshot_attribute(
                 SnapshotId=snapshot_id,
                 Attribute="createVolumePermission",
