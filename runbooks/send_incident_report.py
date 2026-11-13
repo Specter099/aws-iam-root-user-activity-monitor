@@ -6,7 +6,6 @@ runbook keys are present.
 Input:  full state (EventBridge event + all previous $.xxx_result keys)
 Output: {message_id}
 """
-import json
 import os
 from datetime import datetime, timezone
 

@@ -7,7 +7,6 @@ Input:  full state (EventBridge event + $.log_result)
 Output: {key_id, key_owner, created_by, is_suspicious}
         → stored at $.key_creation_result
 """
-import boto3
 
 
 def lambda_handler(event, context):
@@ -22,8 +21,6 @@ def lambda_handler(event, context):
     # The creating principal
     created_by_arn = user_identity.get("arn", "Unknown")
     created_by_type = user_identity.get("type", "Unknown")
-    # For assumed-role sessions, the principalId encodes the actual caller
-    created_by = user_identity.get("principalId", created_by_arn)
 
     # Suspicious if: root created a key for an IAM user, or a different IAM
     # user created a key for another user (cross-user key creation)

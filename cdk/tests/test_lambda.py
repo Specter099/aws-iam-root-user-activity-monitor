@@ -7,10 +7,8 @@ patched out before import so the tests can run without AWS credentials.
 """
 
 import importlib
-import json
 import os
 import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 from botocore.exceptions import ClientError as BotocoreClientError
@@ -86,7 +84,7 @@ def _make_cloudtrail_event(
         "awsRegion": "us-east-1",
         "sourceIPAddress": "1.2.3.4",
         "userAgent": "aws-cli/2.0",
-        "userIdentity": {"type": user_type, "arn": f"arn:aws:iam::123456789012:user/test"},
+        "userIdentity": {"type": user_type, "arn": "arn:aws:iam::123456789012:user/test"},
         "requestParameters": request_params or {},
     }
     if mfa_used is not None:

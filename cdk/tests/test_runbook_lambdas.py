@@ -4,8 +4,6 @@ AWS calls are stubbed via unittest.mock so no real credentials are needed.
 """
 import importlib
 import json
-import sys
-import types
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -712,7 +710,6 @@ class TestIncidentResponseStackOutputs(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import subprocess
         import os
         cls._synth_failed = False
         try:

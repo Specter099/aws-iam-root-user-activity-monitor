@@ -7,7 +7,6 @@ Input:  full state (EventBridge event + $.log_result + $.cloudtrail_result)
 Output: {new_keys_found: bool, new_keys: [{key_id, username, created_date}]}
         → stored at $.keys_result
 """
-import os
 
 import boto3
 

@@ -2,7 +2,6 @@ import json
 import boto3
 import logging
 import os
-from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)

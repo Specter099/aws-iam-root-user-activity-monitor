@@ -5,7 +5,6 @@ Called as the first state in every runbook state machine.
 Input:  full EventBridge / CloudTrail event (state machine input)
 Output: {incident_id, timestamp}  → stored at $.log_result
 """
-import json
 import os
 import time
 import uuid
