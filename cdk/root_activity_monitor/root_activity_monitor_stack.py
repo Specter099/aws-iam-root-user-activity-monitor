@@ -1,8 +1,6 @@
 import os
 
 import aws_cdk as cdk
-import aws_cdk.aws_cloudwatch as cloudwatch
-import aws_cdk.aws_cloudwatch_actions as cw_actions
 import aws_cdk.aws_events as events
 import aws_cdk.aws_events_targets as targets
 import aws_cdk.aws_iam as iam
@@ -386,39 +384,6 @@ class RootActivityMonitorStack(cdk.Stack):
         subscription_filter.node.add_dependency(
             cw_logs_role.node.find_child("DefaultPolicy")
         )
-
-        # --- CloudWatch Alarms ---
-        dlq_alarm = cloudwatch.Alarm(
-            self,
-            "DLQMessagesAlarm",
-            alarm_name="root-activity-monitor-dlq-alarm",
-            alarm_description="Alert when root activity monitor Lambda fails and sends messages to DLQ",
-            metric=self.dead_letter_queue.metric_approximate_number_of_messages_visible(
-                period=cdk.Duration.minutes(5),
-                statistic="Sum",
-            ),
-            threshold=0,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-            evaluation_periods=1,
-            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
-        )
-        dlq_alarm.add_alarm_action(cw_actions.SnsAction(self.sns_topic))
-
-        lambda_errors_alarm = cloudwatch.Alarm(
-            self,
-            "LambdaErrorsAlarm",
-            alarm_name="root-activity-monitor-lambda-errors",
-            alarm_description="Alert when root activity monitor Lambda encounters errors",
-            metric=self.lambda_function.metric_errors(
-                period=cdk.Duration.minutes(5),
-                statistic="Sum",
-            ),
-            threshold=0,
-            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-            evaluation_periods=1,
-            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
-        )
-        lambda_errors_alarm.add_alarm_action(cw_actions.SnsAction(self.sns_topic))
 
         # --- Outputs ---
         cdk.CfnOutput(

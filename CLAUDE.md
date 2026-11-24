@@ -19,15 +19,13 @@ Spoke Accounts                           Hub Account
 │         ↓           │   EventBridge   │      ↑          ↙        ↘              │
 │ EventBridge Rule    │ ──────────────→ │      └──── SNS Topic    SQS DLQ         │
 │ (RootActivityRule)  │   (cross-acct)  │               ↓            ↓             │
-└─────────────────────┘                 │    Email Notification  CW Alarm → SNS   │
-                                        │                                          │
-                                        │  CloudWatch Alarms (errors + DLQ)        │
+└─────────────────────┘                 │    Email Notification                      │
                                         └──────────────────────────────────────────┘
 ```
 
 - **Spoke Accounts**: Detect root user activity via CloudTrail and forward events
 - **Hub Account**: Centrally process events, classify severity, and send notifications via SNS
-- **Dead Letter Queue**: Captures failed Lambda invocations with CloudWatch alarm monitoring
+- **Dead Letter Queue**: Captures failed Lambda invocations (the CDK stack has no CloudWatch alarms; the Terraform module still defines them)
 
 ## Directory Structure
 
@@ -91,7 +89,7 @@ Spoke Accounts                           Hub Account
 | File | Purpose |
 |------|---------|
 | `cdk/app.py` | CDK app entry point. Reads `notificationEmail` from context or env var |
-| `cdk/root_activity_monitor/root_activity_monitor_stack.py` | Full hub stack: Lambda, EventBridge, SNS, SQS DLQ, CloudWatch Alarms |
+| `cdk/root_activity_monitor/root_activity_monitor_stack.py` | Full hub stack: Lambda, EventBridge, SNS, SQS DLQ (no CloudWatch alarms) |
 
 ### Lambda Function — Incident Detection Engine
 
@@ -124,8 +122,8 @@ HIGH_ACTIONS = {
 | Resource | Purpose |
 |----------|---------|
 | `aws_sqs_queue.RootActivityDLQ` | Dead Letter Queue — captures failed Lambda invocations (14-day retention, KMS encrypted) |
-| `aws_cloudwatch_metric_alarm.DLQMessagesAlarm` | Alerts when messages land in the DLQ |
-| `aws_cloudwatch_metric_alarm.LambdaErrorsAlarm` | Alerts on any Lambda execution errors |
+| `aws_cloudwatch_metric_alarm.DLQMessagesAlarm` | Terraform only: alerts when messages land in the DLQ |
+| `aws_cloudwatch_metric_alarm.LambdaErrorsAlarm` | Terraform only: alerts on any Lambda execution errors |
 | `aws_cloudwatch_log_group.RootActivityLambdaLogs` | Log retention set to 90 days |
 
 ## Development Workflow
@@ -322,7 +320,7 @@ Hub and spoke patterns must stay in sync across all IaC:
 - **Spokes**: `EventPattern` in `spoke-stackset.yaml`
 
 ### Monitoring the Dead Letter Queue
-Failed Lambda invocations are sent to the SQS DLQ (`root-activity-monitor-dlq`). A CloudWatch alarm triggers SNS notification when messages appear. To inspect failed events:
+Failed Lambda invocations are sent to the SQS DLQ (`root-activity-monitor-dlq`). In the Terraform module a CloudWatch alarm triggers SNS notification when messages appear; the CDK stack has no alarms, so check the queue manually. To inspect failed events:
 ```bash
 aws sqs receive-message --queue-url <DLQ_URL> --max-number-of-messages 10
 ```
